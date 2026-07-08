@@ -10,9 +10,27 @@ import * as fs from "fs";
 import * as os from "os";
 import { getTabUri, isSaveableTab } from "../../../utils/tab";
 
-suite("Tab Types Integration Test Suite", () => {
+suite("Tab Types Integration Test Suite", function () {
+  this.timeout(20000); // Increase timeout to 20 seconds for slow CI environments
+
   let tempDir: string;
   let testFiles: { [key: string]: string } = {};
+
+  async function waitForActiveTab(timeoutMs = 5000): Promise<vscode.Tab> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+      if (activeTab) {
+        return activeTab;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const currentActive = vscode.window.tabGroups.activeTabGroup.activeTab;
+    if (currentActive) {
+      return currentActive;
+    }
+    throw new Error("Timeout waiting for active tab to open");
+  }
 
   suiteSetup(async () => {
     // Create temp directory with test files
@@ -58,9 +76,7 @@ suite("Tab Types Integration Test Suite", () => {
     await vscode.commands.executeCommand("vscode.open", uri);
 
     // Wait for tab to be created
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    const activeTab = await waitForActiveTab();
     assert.ok(activeTab, "Active tab should exist");
     assert.ok(
       activeTab.input instanceof vscode.TabInputText,
@@ -85,9 +101,7 @@ suite("Tab Types Integration Test Suite", () => {
     const uri = vscode.Uri.file(testFiles.notebook);
     await vscode.commands.executeCommand("vscode.open", uri);
 
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    const activeTab = await waitForActiveTab(10000);
     assert.ok(activeTab, "Active tab should exist");
 
     // Note: May be TabInputNotebook or TabInputText depending on extension
@@ -110,9 +124,7 @@ suite("Tab Types Integration Test Suite", () => {
       "Diff Test",
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    const activeTab = await waitForActiveTab();
     assert.ok(activeTab, "Active tab should exist");
 
     if (activeTab.input instanceof vscode.TabInputTextDiff) {
