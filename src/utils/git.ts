@@ -19,10 +19,17 @@ export function reinitGitBranchGroups(git: API): vscode.Disposable | void {
   const repo = git.repositories[0];
   let latestBranch = repo.state.HEAD?.name;
   Global.branchName = latestBranch || DEFAULT_BRANCH_NAME;
+  
+  if (latestBranch) {
+    Global.storage.setWorkspaceState("git:lastActiveBranch", latestBranch);
+  }
+
   Global.logger.debug(`reinitGitBranchGroups, current Branch: ${latestBranch}`);
 
   return repo.state.onDidChange(async () => {
-    if (repo.state.HEAD?.name !== Global.branchName) {
+    const toBranch = repo.state.HEAD?.name || DEFAULT_BRANCH_NAME;
+
+    if (toBranch !== Global.branchName) {
       // Prevent duplicate processing if already handling a branch change
       if (isProcessingBranchChange) {
         Global.logger.debug(
@@ -34,35 +41,61 @@ export function reinitGitBranchGroups(git: API): vscode.Disposable | void {
       isProcessingBranchChange = true;
       try {
         const fromBranch = Global.branchName;
-        const toBranch = repo.state.HEAD?.name || DEFAULT_BRANCH_NAME;
         Global.logger.debug(
           `Branch changed, from: ${fromBranch}, to: ${toBranch}`,
         );
 
-        // Step 1: Save current state to DB under the old branch name
-        // Create a deep clone with PRESERVED IDs to prevent duplication
-        const currentState = Global.tabsProvider.getState();
-        const stateToSave = currentState.deepClone(true);
-        stateToSave.branchName = fromBranch;
-        await stateToSave.saveToStorage();
-        Global.logger.debug(`Saved state for branch: ${fromBranch}`);
+        // Retrieve last active branch from persistent storage
+        const lastActiveBranch = Global.storage.getWorkspaceState("git:lastActiveBranch");
 
-        // Step 2: Update to new branch name
-        Global.branchName = toBranch;
+        // We only perform the branch switch (archive & load) if:
+        // 1. Both fromBranch and toBranch are real branches (not DEFAULT_BRANCH_NAME "none")
+        // 2. Or, if we are initializing (fromBranch is "none"), but the user switched branches outside VS Code
+        //    (i.e., lastActiveBranch is a real branch different from toBranch)
+        const isRealSwitch = 
+          fromBranch !== DEFAULT_BRANCH_NAME && toBranch !== DEFAULT_BRANCH_NAME;
 
-        // Step 3: Load state for the new branch from DB
-        // Reload from storage directly to get the latest persisted state
-        const newState = await loadBranchStateFromStorage(toBranch);
+        const isExternalSwitch =
+          fromBranch === DEFAULT_BRANCH_NAME && 
+          lastActiveBranch && 
+          lastActiveBranch !== DEFAULT_BRANCH_NAME &&
+          lastActiveBranch !== toBranch;
 
-        if (newState) {
-          Global.logger.debug(`Loading existing state for branch: ${toBranch}`);
-          // Use the loaded state directly (already a fresh instance from storage)
-          await Global.tabsProvider.resetState(newState);
+        if (isRealSwitch || isExternalSwitch) {
+          const archiveBranch = isRealSwitch ? fromBranch : lastActiveBranch!;
+
+          // Step 1: Save current state to DB under the old branch name
+          // Create a deep clone with PRESERVED IDs to prevent duplication
+          const currentState = Global.tabsProvider.getState();
+          const stateToSave = currentState.deepClone(true);
+          stateToSave.branchName = archiveBranch;
+          await stateToSave.saveToStorage();
+          Global.logger.debug(`Saved state for branch: ${archiveBranch}`);
+
+          // Step 2: Load state for the new branch from DB
+          // Reload from storage directly to get the latest persisted state
+          const newState = await loadBranchStateFromStorage(toBranch);
+
+          if (newState) {
+            Global.logger.debug(`Loading existing state for branch: ${toBranch}`);
+            // Use the loaded state directly (already a fresh instance from storage)
+            await Global.tabsProvider.resetState(newState);
+          } else {
+            Global.logger.debug(
+              `No existing state for branch: ${toBranch}, creating empty state`,
+            );
+            await Global.tabsProvider.clearState();
+          }
         } else {
           Global.logger.debug(
-            `No existing state for branch: ${toBranch}, creating empty state`,
+            `Skipped state archiving/loading for branch transition: ${fromBranch} -> ${toBranch}`,
           );
-          await Global.tabsProvider.clearState();
+        }
+
+        // Step 3: Update to new branch name globally and in persistent storage
+        Global.branchName = toBranch;
+        if (toBranch !== DEFAULT_BRANCH_NAME) {
+          await Global.storage.setWorkspaceState("git:lastActiveBranch", toBranch);
         }
 
         // Step 4: Reload branches provider to reflect changes
