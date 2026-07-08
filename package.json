@@ -8,7 +8,7 @@
     "email": "stephenzhang666666@gmail.com"
   },
   "icon": "icon.png",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "engines": {
     "vscode": "^1.90.0"
   },
